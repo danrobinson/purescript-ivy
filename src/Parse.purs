@@ -1,5 +1,4 @@
-module Parse (parseContract, Contract(Contract), Clause(Clause), Parameter(Parameter), Type(PublicKey, Value, Signature), 
-              Statement(Unlock, Verify), Expr(Call, Variable), parseExpression) where
+module Parse (parseContract, parseExpression) where
 
 import Data.Identity
 
@@ -13,94 +12,26 @@ import Data.String (toCharArray)
 import Data.Tuple (Tuple(Tuple))
 import Data.Unit (Unit)
 import Data.Map (fromFoldable, Map, lookup)
-import Prelude (class Eq, class Show, discard, bind, (<<<), (<>), ($), show)
+import Prelude (discard, bind, ($), show)
 import Data.Maybe (Maybe(Just, Nothing))
 import Text.Parsing.Parser (Parser, ParseError, runParser)
-import Text.Parsing.Parser.Combinators (try, choice, (<?>))
+import Text.Parsing.Parser.Combinators (try, (<?>))
 import Text.Parsing.Parser.Expr (Assoc(AssocLeft), Operator(Infix), OperatorTable, buildExprParser)
 import Text.Parsing.Parser.String (char, oneOf, string)
 import Text.Parsing.Parser.Token (LanguageDef, GenLanguageDef(LanguageDef), letter, alphaNum, TokenParser, makeTokenParser)
-import Data.Foldable (intercalate, fold)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Lazy (fix)
+import Control.Applicative((*>))
+import AST(Contract(Contract), Clause(Clause), Parameter(Parameter), 
+           Type(PublicKey, Value, Signature, HashType, Bytes, Time, Duration, Boolean), 
+           Statement(Unlock, Verify), Expr(Call, Variable, BinaryOp, ArgumentList), 
+           HashFunction(Sha256, Sha1, Ripemd160))
 
-data Expr
-    = NaturalLiteral Int
-    | BinaryOp String Expr Expr
-    | Variable String
-    | Call String (List Expr)
-    | ArgumentList (List Expr)
-
-instance showExpr :: Show Expr where
-    show (NaturalLiteral int) = show int
-    show (BinaryOp op left right)    = show left <> " " <> op <> " " <> show right
-    show (Variable name) = name
-    show (Call name exps) = name <> "(" <> intercalate ", " (map show exps) <> ")"
-    show (ArgumentList exps) = "[" <> intercalate ", " (map show exps) <> "]"
-
-data Statement
-    = Verify Expr
-    | Unlock Expr
-
-instance showStatement :: Show Statement where
-    show (Verify exp) = "    verify " <> show exp <> "\n"
-    show (Unlock exp) = "    unlock " <> show exp <> "\n"
-
-data Parameter
-    = Parameter String Type
-
-derive instance eqParameter :: Eq Parameter
-
-instance showParameter :: Show Parameter where
-    show (Parameter paramName typeName) =
-        paramName <> ": " <> show typeName
-
-data Type
-    = Void
-    | Boolean
-    | Bytes
-    | Signature
-    | PublicKey
-    | Value
-    | Time
-    | Duration
-    | HashType String Type
-
-instance showType :: Show Type where
-    show (HashType hashFunction inputType) = hashFunction <> "(" <> show inputType <> ")"
-    show Boolean = "Boolean"
-    show Bytes = "Bytes"
-    show Signature = "Signature"
-    show PublicKey = "PublicKey"
-    show Time = "Time"
-    show Duration = "Duration"
-    show Value = "Value"
-    show Void = "Void"
-
-data Contract
-  = Contract String (List Parameter) (List Clause)
-
-instance showContract :: Show Contract where
-    show (Contract contractName params clauses) =
-        let clausesString = (map show clauses) in
-        "contract " <> contractName <> "(" <> intercalate ", " (map show params) <> ") {\n" <>
-        fold clausesString <> "}"
-
-data Clause
-  = Clause String (List Parameter) (List Statement)
-
-instance showClause :: Show Clause where
-  show (Clause clauseName params statements) =
-      let statementsString = (map show statements) in
-      "  clause " <> clauseName <> "(" <> intercalate ", " (map show params) <> ") {\n" <>
-      (fold statementsString) <> "  }\n"
-
-derive instance eqContract :: Eq Contract
-derive instance eqClause :: Eq Clause
-derive instance eqType :: Eq Type
-derive instance eqExpr :: Eq Expr
-derive instance eqStatement :: Eq Statement
+hashFunc :: Parser String HashFunction
+hashFunc = (try $ string "Sha256") *> pure Sha256
+       <|> (try $ string "Sha1") *> pure Sha1
+       <|> (try $ string "Ripemd160") *> pure Ripemd160
 
 langDef :: LanguageDef
 langDef = LanguageDef {
@@ -112,7 +43,7 @@ langDef = LanguageDef {
   , identLetter: alphaNum <|> char '_'
   , opStart: oneOf (toCharArray ":!#$%&*+./<=>?@\\^|-~")
   , opLetter: oneOf (toCharArray ":!#$%&*+./<=>?@\\^|-~")
-  , reservedNames: ["contract", "clause", "lock", "unlock", "verify", "with"]
+  , reservedNames: ["contract", "clause", "unlock", "verify"]
   , reservedOpNames: []
   , caseSensitive: true
   }
@@ -151,10 +82,10 @@ call :: Parser String Expr -> Parser String Expr
 call exprParser = do
     funcName <- identifier
     args <- parens (commaSep exprParser)
-    pure (Call funcName args)
+    pure (Call { name: funcName, args: args})
 
 infixOp :: String -> Operator Identity String Expr
-infixOp s = Infix (reservedOp s >>= \_ -> pure (BinaryOp s)) AssocLeft
+infixOp s = Infix (reservedOp s >>= \_ -> pure (\l r -> BinaryOp { op: s, left: l, right: r})) AssocLeft
 
 table :: OperatorTable Identity String Expr
 table = [
@@ -195,9 +126,9 @@ primitive = do
 
 hashType :: Parser String Type -> Parser String Type
 hashType ivyTypeParser = do
-    hashFunction <- choice $ map (try <<< string) ["Sha1", "Sha256", "Ripemd160"]
+    hashFunction <- hashFunc
     inputType <- parens ivyTypeParser
-    pure (HashType hashFunction inputType)
+    pure (HashType {hashFunction: hashFunction, inputType})
 
 ivyType :: Parser String Type
 ivyType = fix \p -> -- unfortunately needed to get around circular reference
@@ -233,10 +164,10 @@ clause = do
 
 parameter :: Parser String Parameter
 parameter = do
-    paramName <- identifier
+    name <- identifier
     reserved ":"
-    paramType <- ivyType
-    pure (Parameter paramName paramType)
+    typeName <- ivyType
+    pure (Parameter { name: name, typeName: typeName})
 
 parameters :: Parser String (List Parameter)
 parameters = commaSep parameter
@@ -247,7 +178,7 @@ contract = do
     name <- identifier
     params <- parens parameters
     clauses <- braces (many clause)
-    pure $ Contract name params clauses
+    pure $ Contract { name: name, params: params, clauses: clauses }
 
 parseContract :: String -> Either ParseError Contract
 parseContract str = runParser str contract
@@ -267,5 +198,4 @@ testContract contractString = do
     case result of
         (Right contract) -> log (show contract)
         (Left err)       -> log (show err)
-
 
