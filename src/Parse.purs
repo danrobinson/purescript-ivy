@@ -11,7 +11,7 @@ import Data.Either (Either(Left, Right))
 import Data.List (List, many)
 import Data.String (toCharArray)
 import Data.Tuple (Tuple(Tuple))
-import Data.Unit (Unit, unit)
+import Data.Unit (Unit)
 import Data.Map (fromFoldable, Map, lookup)
 import Data.Integral (fromIntegral)
 import Prelude (class Eq, class Show, discard, bind, (<<<), (<>), ($), show)
@@ -24,6 +24,7 @@ import Text.Parsing.Parser.Token (LanguageDef, GenLanguageDef(LanguageDef), lett
 import Data.Foldable (intercalate, fold)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
+import Control.Lazy (fix)
 
 data Expr
     = NaturalLiteral Int
@@ -148,10 +149,10 @@ natural = map (NaturalLiteral <<< fromIntegral) lexer.natural
 variable :: Parser String Expr
 variable = map Variable identifier
 
-call :: Parser String Expr
-call = do
+call :: Parser String Expr -> Parser String Expr
+call exprParser = do
     funcName <- identifier
-    args <- parens arguments
+    args <- parens (commaSep exprParser)
     pure (Call funcName args)
 
 prefixOp :: String -> Operator Identity String Expr
@@ -162,23 +163,19 @@ infixOp s = Infix (reservedOp s >>= \_ -> pure (BinaryOp s)) AssocLeft
 
 table :: OperatorTable Identity String Expr
 table = [
-    map prefixOp ["-", "!"],
-    map infixOp ["+", "-"],
-    map infixOp ["==", "!=", ">=", "<=", ">", "<"]
+    map infixOp ["==", "!="]
   ]
 
 expTerm :: Parser String Expr
-expTerm = ((\_ -> parens expr) unit)
-    <|> try ((\_ -> call) unit)
+expTerm = fix \p ->  -- unfortunately needed to get around circular definition
+    parens p
+    <|> try (call p)
     <|> variable
     <|> natural
     <?> "term"
 
 expr :: Parser String Expr
-expr = buildExprParser table ((\_ -> expTerm) unit)
-
-arguments :: Parser String (List Expr)
-arguments = commaSep ((\_ -> expr) unit)
+expr = buildExprParser table expTerm
 
 prims :: Array (Tuple String Type)
 prims = [Tuple "String" String,
@@ -201,15 +198,16 @@ primitive = do
             Nothing   -> empty
             Just prim -> pure prim
 
-hashType :: Parser String Type
-hashType = do
+hashType :: Parser String Type -> Parser String Type
+hashType ivyTypeParser = do
     hashFunction <- choice $ map (try <<< string) ["Sha3", "Sha256"]
-    inputType <- parens ivyType
+    inputType <- parens ivyTypeParser
     pure (HashType hashFunction inputType)
 
 ivyType :: Parser String Type
-ivyType = try primitive
-      <|> ((\_ -> hashType) unit)
+ivyType = fix \p -> -- unfortunately needed to get around circular reference
+          try primitive
+      <|> hashType p
       <?> "type"
 
 statement :: Parser String Statement
@@ -263,7 +261,7 @@ parseClause :: String -> Either ParseError Clause
 parseClause str = runParser str clause
 
 parseExpression :: String -> Either ParseError Expr
-parseExpression str = runParser str expTerm
+parseExpression str = runParser str expr
 
 parsePrimitive :: String -> Either ParseError Type
 parsePrimitive str = runParser str primitive
