@@ -129,6 +129,14 @@ revealFixedPoint = """contract RevealFixedPoint(val: Value) {
   }
 }"""
 
+revealFixedPointWithComment :: String
+revealFixedPointWithComment = """contract RevealFixedPoint(val: Value) {
+  clause reveal(hash: Bytes) {
+    verify bytes(sha256(hash)) == hash
+    unlock val // test that comments work
+  }
+}"""
+
 
 testContract :: String -> Aff (RunnerEffects ()) Unit
 testContract c = map show (parseContract c) `shouldEqual` Right c
@@ -158,4 +166,6 @@ main = run [consoleReporter] do
       testContract vaultSpend
     it "parses RevealFixedPoint" $
       testContract revealFixedPoint
+    it "parses RevealFixedPoint" $
+      map show (parseContract revealFixedPointWithComment) `shouldEqual` Right revealFixedPoint
     
