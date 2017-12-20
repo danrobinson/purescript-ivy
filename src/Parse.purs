@@ -13,12 +13,11 @@ import Data.String (toCharArray)
 import Data.Tuple (Tuple(Tuple))
 import Data.Unit (Unit)
 import Data.Map (fromFoldable, Map, lookup)
-import Data.Integral (fromIntegral)
 import Prelude (class Eq, class Show, discard, bind, (<<<), (<>), ($), show)
 import Data.Maybe (Maybe(Just, Nothing))
 import Text.Parsing.Parser (Parser, ParseError, runParser)
 import Text.Parsing.Parser.Combinators (try, choice, (<?>))
-import Text.Parsing.Parser.Expr (Assoc(AssocLeft), Operator(Prefix, Infix), OperatorTable, buildExprParser)
+import Text.Parsing.Parser.Expr (Assoc(AssocLeft), Operator(Infix), OperatorTable, buildExprParser)
 import Text.Parsing.Parser.String (char, oneOf, string)
 import Text.Parsing.Parser.Token (LanguageDef, GenLanguageDef(LanguageDef), letter, alphaNum, TokenParser, makeTokenParser)
 import Data.Foldable (intercalate, fold)
@@ -28,18 +27,17 @@ import Control.Lazy (fix)
 
 data Expr
     = NaturalLiteral Int
-    | UnaryOp String Expr
     | BinaryOp String Expr Expr
     | Variable String
     | Call String (List Expr)
+    | ArgumentList (List Expr)
 
 instance showExpr :: Show Expr where
     show (NaturalLiteral int) = show int
-    show (UnaryOp op (NaturalLiteral nat))     = op <> show nat
-    show (UnaryOp op exp)     = op <> "(" <> show exp <> ")"
-    show (BinaryOp op left right)    = "(" <> show left <> " " <> op <> " " <> show right <> ")"
+    show (BinaryOp op left right)    = show left <> " " <> op <> " " <> show right
     show (Variable name) = name
     show (Call name exps) = name <> "(" <> intercalate ", " (map show exps) <> ")"
+    show (ArgumentList exps) = "[" <> intercalate ", " (map show exps) <> "]"
 
 data Statement
     = Verify Expr
@@ -61,23 +59,23 @@ instance showParameter :: Show Parameter where
 data Type
     = Void
     | Boolean
-    | String
-    | Integer
+    | Bytes
     | Signature
     | PublicKey
     | Value
-    | Program
+    | Time
+    | Duration
     | HashType String Type
 
 instance showType :: Show Type where
     show (HashType hashFunction inputType) = hashFunction <> "(" <> show inputType <> ")"
     show Boolean = "Boolean"
-    show String = "String"
+    show Bytes = "Bytes"
     show Signature = "Signature"
     show PublicKey = "PublicKey"
-    show Integer = "Integer"
+    show Time = "Time"
+    show Duration = "Duration"
     show Value = "Value"
-    show Program = "Program"
     show Void = "Void"
 
 data Contract
@@ -125,6 +123,9 @@ lexer = makeTokenParser langDef
 parens :: forall a. Parser String a -> Parser String a
 parens = lexer.parens
 
+brackets :: forall a. Parser String a -> Parser String a
+brackets = lexer.brackets
+
 braces :: forall a. Parser String a -> Parser String a
 braces = lexer.braces
 
@@ -143,9 +144,6 @@ commaSep = lexer.commaSep
 identifier :: Parser String String
 identifier = lexer.identifier
 
-natural :: Parser String Expr
-natural = map (NaturalLiteral <<< fromIntegral) lexer.natural
-
 variable :: Parser String Expr
 variable = map Variable identifier
 
@@ -154,9 +152,6 @@ call exprParser = do
     funcName <- identifier
     args <- parens (commaSep exprParser)
     pure (Call funcName args)
-
-prefixOp :: String -> Operator Identity String Expr
-prefixOp s = Prefix (reservedOp s >>= \_ -> pure (UnaryOp s))
 
 infixOp :: String -> Operator Identity String Expr
 infixOp s = Infix (reservedOp s >>= \_ -> pure (BinaryOp s)) AssocLeft
@@ -170,21 +165,21 @@ expTerm :: Parser String Expr
 expTerm = fix \p ->  -- unfortunately needed to get around circular definition
     parens p
     <|> try (call p)
+    <|> map ArgumentList (brackets (commaSep p))
     <|> variable
-    <|> natural
     <?> "term"
 
 expr :: Parser String Expr
 expr = buildExprParser table expTerm
 
 prims :: Array (Tuple String Type)
-prims = [Tuple "String" String,
-    Tuple "Integer" Integer,
+prims = [Tuple "Bytes" Bytes,
+    Tuple "Time" Time,
+    Tuple "Duration" Duration,
     Tuple "Boolean" Boolean,
     Tuple "Signature" Signature,
     Tuple "PublicKey" PublicKey,
-    Tuple "Value" Value,
-    Tuple "Program" Program
+    Tuple "Value" Value
     ]
 
 primitives :: Map String Type
@@ -200,7 +195,7 @@ primitive = do
 
 hashType :: Parser String Type -> Parser String Type
 hashType ivyTypeParser = do
-    hashFunction <- choice $ map (try <<< string) ["Sha3", "Sha256"]
+    hashFunction <- choice $ map (try <<< string) ["Sha1", "Sha256", "Ripemd160"]
     inputType <- parens ivyTypeParser
     pure (HashType hashFunction inputType)
 
