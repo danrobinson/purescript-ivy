@@ -48,6 +48,7 @@ data Type
     | Value
     | Time
     | Duration
+    | ListLiteral Type
     | HashType { hashFunction :: HashFunction, inputType :: Type }
 
 instance showType :: Show Type where
@@ -60,6 +61,7 @@ instance showType :: Show Type where
     show Duration = "Duration"
     show Value = "Value"
     show Void = "Void"
+    show (ListLiteral t) = "[" <> show t <> "]"
 
 data Contract
   = Contract { name :: String, params :: (List Parameter), clauses :: (List Clause) }

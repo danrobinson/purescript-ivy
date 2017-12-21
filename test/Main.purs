@@ -3,28 +3,18 @@ module Test.Main where
 import Prelude
 import Control.Monad.Eff (Eff)
 import Control.Monad.Aff (Aff)
-import Data.Either (Either(Right))
+import Data.Either (Either(Left, Right))
 import Test.Spec (describe, it)
-import Test.Spec.Assertions (shouldEqual)
+import Test.Spec.Assertions (shouldEqual, fail)
 import Test.Spec.Reporter.Console (consoleReporter)
 import Test.Spec.Runner (RunnerEffects, run)
 import Parse (parseContract)
-
--- lockWithPublicKey :: Contract
--- lockWithPublicKey = let
---     params = (fromFoldable [ Parameter "pubKey" PublicKey, Parameter "val" Value])
---     clauseParams = fromFoldable [Parameter "sig" Signature]
---     verify = Verify $ Call "checkTxSig" (fromFoldable [Variable "pubKey", Variable "sig"])
---     unlockStatement = Unlock $ Variable "val"
---     spendClause = Clause "spend" clauseParams (fromFoldable [verify, unlockStatement])
---     statements = (fromFoldable [spendClause])
---   in
---     Contract "LockWithPublicKey" params statements
+import Compile (compile)
 
 lockWithPublicKey :: String
 lockWithPublicKey = """contract LockWithPublicKey(pubKey: PublicKey, val: Value) {
   clause spend(sig: Signature) {
-    verify checkTxSig(pubKey, sig)
+    verify checkSig(pubKey, sig)
     unlock val
   }
 }"""
@@ -138,34 +128,65 @@ revealFixedPointWithComment = """contract RevealFixedPoint(val: Value) {
 }"""
 
 
-testContract :: String -> Aff (RunnerEffects ()) Unit
-testContract c = map show (parseContract c) `shouldEqual` Right c
+testParseContract :: String -> Aff (RunnerEffects ()) Unit
+testParseContract source =
+  case parseContract source of
+    Left parseError -> fail (show parseError)
+    Right contract -> pure unit
+
+testCompileContract :: String -> Aff (RunnerEffects ()) Unit
+testCompileContract source =
+  case compile source of
+    Left compileError -> fail (show compileError)
+    Right contract -> pure unit
 
 main :: Eff (RunnerEffects ()) Unit
 main = run [consoleReporter] do
   describe "parseContract" $ do
     it "parses LockWithPublicKey" $
-      testContract lockWithPublicKey
+      testParseContract lockWithPublicKey
     it "parses LockWithMultiSig" $
-      testContract lockWithMultiSig
+      testParseContract lockWithMultiSig
     it "parses LockWithPublicKeyHash" $
-      testContract lockWithPublicKeyHash
+      testParseContract lockWithPublicKeyHash
     it "parses RevealPreimage" $
-      testContract revealPreimage
+      testParseContract revealPreimage
     it "parses RevealCollision" $
-      testContract revealCollision
+      testParseContract revealCollision
     it "parses LockUntil" $
-      testContract lockUntil
+      testParseContract lockUntil
     it "parses LockDelay" $
-      testContract lockDelay
+      testParseContract lockDelay
     it "parses TransferWithTimeout" $
-      testContract transferWithTimeout
+      testParseContract transferWithTimeout
     it "parses EscrowWithDelay" $
-      testContract escrowWithDelay
+      testParseContract escrowWithDelay
     it "parses VaultSpend" $
-      testContract vaultSpend
+      testParseContract vaultSpend
     it "parses RevealFixedPoint" $
-      testContract revealFixedPoint
-    it "parses RevealFixedPoint" $
+      testParseContract revealFixedPoint
+    it "ignores comments" $
       map show (parseContract revealFixedPointWithComment) `shouldEqual` Right revealFixedPoint
-    
+  describe "compile" $ do
+    it "compiles LockWithPublicKey" $
+      testCompileContract lockWithPublicKey
+    it "compiles LockWithMultiSig" $
+      testCompileContract lockWithMultiSig
+    it "compiles LockWithPublicKeyHash" $
+      testCompileContract lockWithPublicKeyHash
+    it "compiles RevealPreimage" $
+      testCompileContract revealPreimage
+    it "compiles RevealCollision" $
+      testCompileContract revealCollision
+    it "compiles LockUntil" $
+      testCompileContract lockUntil
+    it "compiles LockDelay" $
+      testCompileContract lockDelay
+    it "compiles TransferWithTimeout" $
+      testCompileContract transferWithTimeout
+    it "compiles EscrowWithDelay" $
+      testCompileContract escrowWithDelay
+    it "compiles VaultSpend" $
+      testCompileContract vaultSpend
+    it "compiles RevealFixedPoint" $
+      testCompileContract revealFixedPoint

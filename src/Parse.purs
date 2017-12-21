@@ -6,21 +6,19 @@ import Control.Alt ((<|>))
 import Control.Monad (pure, (>>=))
 import Control.Plus (empty)
 import Data.Functor (map)
-import Data.Either (Either(Left, Right))
+import Data.Either (Either)
 import Data.List (List, many)
 import Data.String (toCharArray)
 import Data.Tuple (Tuple(Tuple))
 import Data.Unit (Unit)
 import Data.Map (fromFoldable, Map, lookup)
-import Prelude (discard, bind, ($), show)
+import Prelude (discard, bind, ($))
 import Data.Maybe (Maybe(Just, Nothing))
 import Text.Parsing.Parser (Parser, ParseError, runParser)
 import Text.Parsing.Parser.Combinators (try, (<?>))
 import Text.Parsing.Parser.Expr (Assoc(AssocLeft), Operator(Infix), OperatorTable, buildExprParser)
 import Text.Parsing.Parser.String (char, oneOf, string)
 import Text.Parsing.Parser.Token (LanguageDef, GenLanguageDef(LanguageDef), letter, alphaNum, TokenParser, makeTokenParser)
-import Control.Monad.Eff (Eff)
-import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Lazy (fix)
 import Control.Applicative((*>))
 import AST(Contract(Contract), Clause(Clause), Parameter(Parameter), 
@@ -191,11 +189,4 @@ parseExpression str = runParser str expr
 
 parsePrimitive :: String -> Either ParseError Type
 parsePrimitive str = runParser str primitive
-
-testContract :: String -> forall e. Eff (console :: CONSOLE | e) Unit
-testContract contractString = do
-    let result = parseContract contractString
-    case result of
-        (Right contract) -> log (show contract)
-        (Left err)       -> log (show err)
 
