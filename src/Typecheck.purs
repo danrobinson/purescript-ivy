@@ -1,6 +1,6 @@
 module Typecheck
   ( Check, TypeError(ParseFailure, Mismatch, AlreadyDefined, NotInScope), 
-    typecheckContract, runTypecheck, Env, Name ) where
+    typecheckContract, runTypecheck, Env, Name, TypeCheckerState, TypeVariableBinding ) where
 
 import Functions
 
@@ -24,19 +24,23 @@ type Name = String
 
 type Env = M.StrMap Type
 
-type Check = (ExceptT TypeError (Reader Env))
+type TypeVariableBinding = Maybe Type
+
+type TypeCheckerState = { variables :: Env, typeVariable :: TypeVariableBinding }
+
+type Check = (ExceptT TypeError (Reader TypeCheckerState))
 
 lookupVar :: Name -> Check Type
 lookupVar name = do
-  env <- ask
-  case M.lookup name env of
+  state <- ask
+  case M.lookup name state.variables of
     Just t  -> pure t
     Nothing -> throwError $ NotInScope name
 
 checkUnused :: Parameter -> Check Unit
 checkUnused (Parameter { name: name  }) = do
-  env <- ask
-  case M.lookup name env of
+  state <- ask
+  case M.lookup name state.variables of
     Just e  -> throwError $ AlreadyDefined name
     Nothing -> pure unit
 
@@ -106,9 +110,12 @@ typecheckStatement st = case st of
 addParameter ::  Env -> Parameter -> Env
 addParameter env (Parameter { name: n, typeName: t }) = M.insert n t env
 
-composeParameters :: List Parameter -> Env -> Env
-composeParameters ps env =
-  foldl addParameter env ps
+composeParameters :: List Parameter -> TypeCheckerState -> TypeCheckerState
+composeParameters ps state =
+  state { variables = foldl addParameter state.variables ps }
+
+bindTypeVariable :: Type -> TypeCheckerState -> TypeCheckerState
+bindTypeVariable t s = s { typeVariable = Just t }
 
 scoped :: forall t. List Parameter -> Check t -> Check t
 scoped ps = local (composeParameters ps)
@@ -137,6 +144,7 @@ data TypeError
   | NoEmptyLists
   | CompareDifferent Type Type
   | CompareBoolean
+  | BugError String
 
 derive instance eqTypeError :: Eq TypeError
 
@@ -149,9 +157,10 @@ instance showTypeError :: Show TypeError where
   show NoEmptyLists = "Empty lists are not allowed"
   show (CompareDifferent t1 t2) = "Cannot compare types " <> show t1 <> " and " <> show t2
   show CompareBoolean = "Comparing two Booleans is not allowed"
+  show (BugError msg) = "Bug: " <> msg
 
 runTypecheck :: forall t. Check t -> Either TypeError t
-runTypecheck c = unwrap $ runReaderT (runExceptT c) M.empty
+runTypecheck c = unwrap $ runReaderT (runExceptT c) { variables: M.empty, typeVariable: Nothing }
 
 typecheckContract :: Contract -> Either TypeError Type
 typecheckContract = runTypecheck <<< contractCheck

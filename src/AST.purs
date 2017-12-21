@@ -50,6 +50,7 @@ data Type
     | Duration
     | ListLiteral Type
     | HashType { hashFunction :: HashFunction, inputType :: Type }
+    | TypeVariable
 
 instance showType :: Show Type where
     show (HashType { hashFunction: hashFunction, inputType: inputType }) = show hashFunction <> "(" <> show inputType <> ")"
@@ -62,6 +63,7 @@ instance showType :: Show Type where
     show Value = "Value"
     show Void = "Void"
     show (ListLiteral t) = "[" <> show t <> "]"
+    show TypeVariable = "T"
 
 data Contract
   = Contract { name :: String, params :: (List Parameter), clauses :: (List Clause) }
