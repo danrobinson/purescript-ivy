@@ -1,6 +1,6 @@
 module Typecheck
   ( Check, TypeError(ParseFailure, Mismatch, AlreadyDefined, NotInScope), 
-    typecheckContract, runTypecheck, Env, Name, TypeCheckerState, TypeVariableBinding ) where
+    typecheckContract, runTypecheck, Env, Name ) where
 
 import Functions
 
@@ -10,7 +10,7 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.Reader (Reader, ask, local, runReaderT)
 import Data.Either (Either)
 import Data.Functor (map)
-import Data.List (List, length, foldl, zipWithA)
+import Data.List ((:), length, foldl, zipWithA, List(Nil))
 import Data.List.NonEmpty (fromList)
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Newtype (unwrap)
@@ -24,23 +24,19 @@ type Name = String
 
 type Env = M.StrMap Type
 
-type TypeVariableBinding = Maybe Type
-
-type TypeCheckerState = { variables :: Env, typeVariable :: TypeVariableBinding }
-
-type Check = (ExceptT TypeError (Reader TypeCheckerState))
+type Check = (ExceptT TypeError (Reader Env))
 
 lookupVar :: Name -> Check Type
 lookupVar name = do
-  state <- ask
-  case M.lookup name state.variables of
+  env <- ask
+  case M.lookup name env of
     Just t  -> pure t
     Nothing -> throwError $ NotInScope name
 
 checkUnused :: Parameter -> Check Unit
 checkUnused (Parameter { name: name  }) = do
-  state <- ask
-  case M.lookup name state.variables of
+  env <- ask
+  case M.lookup name env of
     Just e  -> throwError $ AlreadyDefined name
     Nothing -> pure unit
 
@@ -64,6 +60,9 @@ matchCheckTypes ct1 ct2 = do
   matchTypes t1 t2
 
 unify :: TypeSignature -> List Expr -> Check Type
+unify (TypeSignature _ (HashType { hashFunction: hashFunc })) (exp:Nil) = do
+  t1 <- typecheckExpression exp
+  pure (HashType { hashFunction: hashFunc, inputType: t1 })
 unify (TypeSignature inputTypes outputType) exprs = do
   when (length inputTypes /= length exprs) (throwError $ WrongNumber (length inputTypes) (length exprs))
   _ <- zipWithA match exprs inputTypes
@@ -110,12 +109,9 @@ typecheckStatement st = case st of
 addParameter ::  Env -> Parameter -> Env
 addParameter env (Parameter { name: n, typeName: t }) = M.insert n t env
 
-composeParameters :: List Parameter -> TypeCheckerState -> TypeCheckerState
-composeParameters ps state =
-  state { variables = foldl addParameter state.variables ps }
-
-bindTypeVariable :: Type -> TypeCheckerState -> TypeCheckerState
-bindTypeVariable t s = s { typeVariable = Just t }
+composeParameters :: List Parameter -> Env -> Env
+composeParameters ps env =
+  foldl addParameter env ps
 
 scoped :: forall t. List Parameter -> Check t -> Check t
 scoped ps = local (composeParameters ps)
@@ -144,7 +140,6 @@ data TypeError
   | NoEmptyLists
   | CompareDifferent Type Type
   | CompareBoolean
-  | BugError String
 
 derive instance eqTypeError :: Eq TypeError
 
@@ -157,10 +152,9 @@ instance showTypeError :: Show TypeError where
   show NoEmptyLists = "Empty lists are not allowed"
   show (CompareDifferent t1 t2) = "Cannot compare types " <> show t1 <> " and " <> show t2
   show CompareBoolean = "Comparing two Booleans is not allowed"
-  show (BugError msg) = "Bug: " <> msg
 
 runTypecheck :: forall t. Check t -> Either TypeError t
-runTypecheck c = unwrap $ runReaderT (runExceptT c) { variables: M.empty, typeVariable: Nothing }
+runTypecheck c = unwrap $ runReaderT (runExceptT c) M.empty
 
 typecheckContract :: Contract -> Either TypeError Type
 typecheckContract = runTypecheck <<< contractCheck
